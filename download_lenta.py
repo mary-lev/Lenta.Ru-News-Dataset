@@ -78,20 +78,20 @@ class LentaParser:
     @staticmethod
     def parse_article_html(html: str):
         doc_tree = BeautifulSoup(html, LentaParser.default_parser)
-        tags = doc_tree.find("a", "item dark active")
+        tags = doc_tree.find("a", "rubric-header__link _active")
         tags = tags.get_text() if tags else None
 
-        body = doc_tree.find("div", attrs={"itemprop": "articleBody"})
+        body = doc_tree.find("div", "topic-body__content")
 
         if not body:
             raise RuntimeError(f"Article body is not found")
 
-        text = " ".join([p.get_text() for p in body.find_all("p")])
+        text = " ".join([p.get_text() for p in body.find_all("p", "topic-body__content-text")])
 
-        topic = doc_tree.find("a", "b-header-inner__block")
+        topic = doc_tree.find("a", "topic-header__item topic-header__rubric")
         topic = topic.get_text() if topic else None
 
-        title = doc_tree.find("h1", attrs={"itemprop": "headline"})
+        title = doc_tree.find("h1", "topic-body__titles")
         title = title.get_text() if title else None
 
         return {"title": title, "text": text, "topic": topic, "tags": tags}
@@ -99,20 +99,35 @@ class LentaParser:
     @staticmethod
     def _extract_urls_from_html(html: str):
         doc_tree = BeautifulSoup(html, LentaParser.default_parser)
-        news_list = doc_tree.find_all("div", "item news b-tabloid__topic_news")
-        return tuple(f"https://lenta.ru{news.find('a')['href']}" for news in news_list)
+        news_list = doc_tree.find_all("li", "archive-page__item _news")
 
-    async def _fetch_all_news_on_page(self, html: str):
-        # Get news URLs from raw html
-        loop = asyncio.get_running_loop()
-        news_urls = await loop.run_in_executor(
-            self._executor, self._extract_urls_from_html, html
-        )
+        next_page_url = None
+        load_mores = doc_tree.find_all("a", class_="loadmore js-loadmore _two-buttons")
+        for load_more in load_mores:
+            if load_more and "Дальше" in load_more.get_text() and "_disabled" not in load_more.get("class", []):
+                next_page_url = f"https://lenta.ru{load_more['href']}"
+                break
+
+        news_urls = tuple(f"https://lenta.ru{news.find('a')['href']}" for news in news_list)
+        return news_urls, next_page_url
+
+    async def _fetch_all_news_on_page(self, initial_html: str):
+        news_urls = []
+        html = initial_html
+
+        while True:
+            page_news_urls, next_page_url = await asyncio.to_thread(self._extract_urls_from_html, html)
+            news_urls.extend(page_news_urls)
+
+            if next_page_url:
+                html = await self.fetch(next_page_url)
+            else:
+                break
 
         # Fetching news
-        tasks = tuple(asyncio.create_task(self.fetch(url)) for url in news_urls)
+        tasks = [asyncio.create_task(self.fetch(url)) for url in set(news_urls)]
 
-        fetched_raw_news = dict()
+        fetched_raw_news = {}
 
         for i, task in enumerate(tasks):
             try:
@@ -120,22 +135,18 @@ class LentaParser:
             except aiohttp.ClientResponseError as exc:
                 logger.error(f"Cannot fetch {exc.request_info.url}: {exc}")
             except asyncio.TimeoutError:
-                logger.exception("Cannot fetch. Timout")
+                logger.exception("Cannot fetch. Timeout")
             else:
                 fetched_raw_news[news_urls[i]] = fetch_res
 
-        for url, html in fetched_raw_news.items():
-            fetched_raw_news[url] = loop.run_in_executor(
-                self._executor, self.parse_article_html, html
-            )
-
+        parse_tasks = {url: asyncio.to_thread(self.parse_article_html, html) for url, html in fetched_raw_news.items()}
         parsed_news = []
 
-        for url, task in fetched_raw_news.items():
+        for url, task in parse_tasks.items():
             try:
                 parse_res = await task
-            except Exception:
-                logger.exception(f"Cannot parse {url}")
+            except Exception as e:
+                logger.exception(f"Cannot parse {url}: {e}")
             else:
                 parse_res["url"] = url
                 parsed_news.append(parse_res)
@@ -169,6 +180,8 @@ class LentaParser:
                 logger.exception(f"Cannot fetch {news_page_url}")
             except aiohttp.ClientConnectionError:
                 logger.exception(f"Cannot fetch {news_page_url}")
+            except BaseException as e:
+                logger.info(f"Cannot fetch {news_page_url}: {e}")
             else:
                 n_proccessed_news = await self._fetch_all_news_on_page(html)
 

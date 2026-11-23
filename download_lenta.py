@@ -96,7 +96,7 @@ class LentaParser:
         if self._sess is None or self._sess.closed:
 
             self._connector = aiohttp.TCPConnector(
-                use_dns_cache=True, ttl_dns_cache=60 * 60, limit=1024
+                use_dns_cache=True, ttl_dns_cache=60 * 60, limit=32
             )
             self._sess = aiohttp.ClientSession(
                 connector=self._connector, timeout=self.timeouts
@@ -104,10 +104,18 @@ class LentaParser:
 
         return self._sess
 
-    async def fetch(self, url: str):
-        response = await self.session.get(url, allow_redirects=False)
-        response.raise_for_status()
-        return await response.text(encoding="utf-8")
+    async def fetch(self, url: str, attempts: int = 3):
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self.session.get(url, allow_redirects=False)
+                response.raise_for_status()
+                return await response.text(encoding="utf-8")
+            except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as exc:
+                # Dropped connections are transient: wait a bit and retry
+                if attempt == attempts:
+                    raise
+                logger.warning(f"Retrying {url} ({attempt}/{attempts - 1}) after {type(exc).__name__}: {exc}")
+                await asyncio.sleep(5 * attempt)
 
     @staticmethod
     def parse_article_html(html: str):
@@ -173,7 +181,9 @@ class LentaParser:
             except aiohttp.ClientResponseError as exc:
                 logger.error(f"Cannot fetch {exc.request_info.url}: {exc}")
             except asyncio.TimeoutError:
-                logger.exception(f"Cannot fetch {url}. Timeout")
+                logger.error(f"Cannot fetch {url}: Timeout")
+            except aiohttp.ClientError as exc:
+                logger.error(f"Cannot fetch {url}: {type(exc).__name__}: {exc}")
             else:
                 fetched_raw_news[url] = fetch_res
 

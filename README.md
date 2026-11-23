@@ -6,11 +6,11 @@ Russian news articles from [lenta.ru](https://lenta.ru) and a script to download
 | Dates | Articles | Download |
 |---|---|---|
 | 30.08.1999 – 14.12.2019 | 800K+ | [Kaggle](https://www.kaggle.com/yutkin/corpus-of-russian-news-articles-from-lenta/), [GitHub](https://github.com/yutkin/Lenta.Ru-News-Dataset/releases) (`bzip2 -d lenta-ru-news.csv.bz2`) |
-| 12/2019 – 12/2023 | ~500K | [Kaggle](https://www.kaggle.com/datasets/marialevchenko/news-dataset-from-lenta-ru-2019-2023) |
+| 14.12.2019 – 23.11.2026 | 1.06M | [Kaggle](https://www.kaggle.com/datasets/marialevchenko/news-dataset-from-lenta-ru-2019-2023) (+ 47 articles later removed from lenta.ru) |
 
 Columns: `url`, `title`, `text`, `topic` (section, e.g. «Мир»), `tags` (subsection, e.g. «Политика»), `date` (`YYYY-MM-DD`, from the URL).
 
-**Known issue:** in the 2019–2023 Kaggle version of January 2024, `url` and `date` do not match the article (a scraper bug, fixed in the script in November 2026). `title`, `text`, `topic` and `tags` are correct.
+The January 2024 Kaggle version had mismatched `url` and `date` (a scraper bug); fixed in the November 2026 version.
 
 ## Download script
 Python 3.9+.

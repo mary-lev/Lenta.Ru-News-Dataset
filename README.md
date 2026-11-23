@@ -13,9 +13,10 @@ Columns: `url`, `title`, `text`, `topic` (section, e.g. «Мир»), `tags` (sub
 **Known issue:** in the 2019–2023 Kaggle version of January 2024, `url` and `date` do not match the article (a scraper bug, fixed in the script in November 2026). `title`, `text`, `topic` and `tags` are correct.
 
 ## Download script
-Python 3.9+, `aiohttp`, `beautifulsoup4`.
+Python 3.9+.
 
 ```
+pip install -r requirements.txt
 python download_lenta.py --from-date 01.01.2024 --to-date 31.12.2024 --outfile lenta_2024.csv
 ```
 

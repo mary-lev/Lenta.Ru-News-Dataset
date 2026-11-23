@@ -136,7 +136,27 @@ class LentaParser:
         title = doc_tree.find("h1", "topic-body__titles")
         title = title.get_text() if title else None
 
+        if tags is None and topic:
+            tags = LentaParser._tags_from_page_title(doc_tree, topic)
+
         return {"title": title, "text": text, "topic": topic, "tags": tags}
+
+    @staticmethod
+    def _tags_from_page_title(doc_tree, topic: str):
+        """Subrubrics dropped from the site menu (e.g. «Дом», «Инвестиции») are still in
+        the page title: "<og:title>: <tags>: <topic>: Lenta.ru"."""
+        page_title = doc_tree.find("meta", attrs={"property": "title"})
+        og_title = doc_tree.find("meta", attrs={"property": "og:title"})
+        if not page_title or not og_title:
+            return None
+
+        page_title, og_title = page_title.get("content", ""), og_title.get("content", "")
+        prefix, suffix = f"{og_title}: ", f": {topic}: Lenta.ru"
+        if not (page_title.startswith(prefix) and page_title.endswith(suffix)):
+            return None
+
+        tags = page_title[len(prefix):len(page_title) - len(suffix)]
+        return tags or None
 
     @staticmethod
     def _extract_urls_from_html(html: str):

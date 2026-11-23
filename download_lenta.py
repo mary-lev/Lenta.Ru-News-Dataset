@@ -2,6 +2,9 @@ import argparse
 import asyncio
 import csv
 import logging
+import os
+import re
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
@@ -16,13 +19,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(name="LentaParser")
 
+FIELDNAMES = ["url", "title", "text", "topic", "tags", "date"]
+
 
 class LentaParser:
 
     # lxml is much faster but error prone
     default_parser = "html.parser"
 
-    def __init__(self, *, max_workers: int, outfile_name: str, from_date: str):
+    def __init__(self, *, max_workers: int, outfile_name: str, from_date: str, to_date: str = None):
         self._endpoint = "https://lenta.ru/news"
 
         self._sess = None
@@ -37,10 +42,39 @@ class LentaParser:
 
         self._n_downloaded = 0
         self._from_date = datetime.strptime(from_date, "%d.%m.%Y")
+        self._to_date = datetime.strptime(to_date, "%d.%m.%Y") if to_date else datetime.today()
+
+        # URLs already written (from a previous run or an earlier day page); never saved twice
+        self._seen_urls = set()
+
+        last_date = self._load_existing_output()
+        if last_date is not None and last_date > self._from_date:
+            logger.info(f"{outfile_name} already has news up to {last_date:%d.%m.%Y}, "
+                        f"resuming from that date (already saved news are skipped)")
+            self._from_date = last_date
+
+    def _load_existing_output(self):
+        """Remember URLs already in the output file and return its latest date (None for a new file)."""
+        if not os.path.exists(self._outfile_name) or os.path.getsize(self._outfile_name) == 0:
+            return None
+
+        csv.field_size_limit(sys.maxsize)
+        last_date = None
+        with open(self._outfile_name, newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames != FIELDNAMES:
+                raise SystemExit(f"{self._outfile_name} has columns {reader.fieldnames}, expected {FIELDNAMES}. "
+                                 f"Use another --outfile.")
+            for row in reader:
+                self._seen_urls.add(row["url"])
+                if row["date"] and (last_date is None or row["date"] > last_date):
+                    last_date = row["date"]
+
+        return datetime.strptime(last_date, "%Y-%m-%d") if last_date else None
 
     @property
     def dates_countdown(self):
-        date_start, date_end = self._from_date, datetime.today()
+        date_start, date_end = self._from_date, self._to_date
 
         while date_start <= date_end:
             yield date_start.strftime("%Y/%m/%d")
@@ -49,11 +83,11 @@ class LentaParser:
     @property
     def writer(self):
         if self._csv_writer is None:
-            self._outfile = open(self._outfile_name, "w", 1)
-            self._csv_writer = csv.DictWriter(
-                self._outfile, fieldnames=["url", "title", "text", "topic", "tags"]
-            )
-            self._csv_writer.writeheader()
+            is_new_file = not os.path.exists(self._outfile_name) or os.path.getsize(self._outfile_name) == 0
+            self._outfile = open(self._outfile_name, "a", 1)
+            self._csv_writer = csv.DictWriter(self._outfile, fieldnames=FIELDNAMES)
+            if is_new_file:
+                self._csv_writer.writeheader()
 
         return self._csv_writer
 
@@ -124,20 +158,24 @@ class LentaParser:
             else:
                 break
 
-        # Fetching news
-        tasks = [asyncio.create_task(self.fetch(url)) for url in set(news_urls)]
+        # Fetching news (keep each task keyed by its own URL so text and URL stay paired)
+        tasks = {
+            url: asyncio.create_task(self.fetch(url))
+            for url in dict.fromkeys(news_urls)
+            if url not in self._seen_urls
+        }
 
         fetched_raw_news = {}
 
-        for i, task in enumerate(tasks):
+        for url, task in tasks.items():
             try:
                 fetch_res = await task
             except aiohttp.ClientResponseError as exc:
                 logger.error(f"Cannot fetch {exc.request_info.url}: {exc}")
             except asyncio.TimeoutError:
-                logger.exception("Cannot fetch. Timeout")
+                logger.exception(f"Cannot fetch {url}. Timeout")
             else:
-                fetched_raw_news[news_urls[i]] = fetch_res
+                fetched_raw_news[url] = fetch_res
 
         parse_tasks = {url: asyncio.to_thread(self.parse_article_html, html) for url, html in fetched_raw_news.items()}
         parsed_news = []
@@ -149,11 +187,14 @@ class LentaParser:
                 logger.exception(f"Cannot parse {url}: {e}")
             else:
                 parse_res["url"] = url
+                date_match = re.search(r"/news/(\d{4})/(\d{2})/(\d{2})/", url)
+                parse_res["date"] = "-".join(date_match.groups()) if date_match else None
                 parsed_news.append(parse_res)
 
         if parsed_news:
             self.writer.writerows(parsed_news)
             self._n_downloaded += len(parsed_news)
+            self._seen_urls.update(news["url"] for news in parsed_news)
 
         return len(parsed_news)
 
@@ -218,12 +259,20 @@ def main():
         help="download news from this date. Example: 30.08.1999",
     )
 
+    parser.add_argument(
+        "--to-date",
+        default=None,
+        type=str,
+        help="download news up to this date inclusive (default: today). Example: 31.12.2023",
+    )
+
     args = parser.parse_args()
 
     parser = LentaParser(
         max_workers=args.cpu_workers,
         outfile_name=args.outfile,
         from_date=args.from_date,
+        to_date=args.to_date,
     )
 
     try:

@@ -2,3 +2,5 @@
 env
 lenta-ru-news.csv
 venv/
+data/
+__pycache__/

@@ -9,6 +9,7 @@
 # Download
 * [GitHub](https://github.com/yutkin/Lenta.Ru-News-Dataset/releases)
 * [Kaggle](https://www.kaggle.com/yutkin/corpus-of-russian-news-articles-from-lenta/)
+* [Kaggle: continuation, 12/2019 - 12/2023](https://www.kaggle.com/datasets/marialevchenko/news-dataset-from-lenta-ru-2019-2023)
 
 # Decompression
 `bzip2 -d lenta-ru-news.csv.bz2`
